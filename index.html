@@ -46,7 +46,7 @@ button.acc{background:var(--acc);color:#10231b;border-color:var(--acc);font-weig
 </head>
 <body>
 <canvas id="v"></canvas>
-<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v5</small></b><span id="info">0 objek</span></div>
+<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v6</small></b><span id="info">0 objek</span></div>
 <div id="toast"></div>
 <div id="bar">
   <div class="row" id="shapes">
@@ -288,12 +288,13 @@ Quality rules:
 If you receive a CURRENT MODEL JSON, apply the INSTRUCTION to it and return the FULL updated JSON with all parts.`;
 const DESC=`You analyze a reference image for a 3D modeler. Reply in plain text under 300 words with: 1) the subject and its overall shape, 2) its real proportions width:height:depth, 3) every part (body, head, limbs, clothes, face details, patterns) with its shape, approximate size relative to the body height, position, and exact hex color, 4) distinctive features that must not be missed.`;
 let lastDesc='';
+const eff=m=>/gpt-oss/.test(m)?'low':/qwen3/.test(m)?'none':null;
 const clean=o=>o.replace(/<think>[\s\S]*?<\/think>/g,'').trim();
 async function ask(key,cands,msgs,tries,label){
   const errs=[];let last;
   for(const m of cands){
     st(label+' ('+m.split('/').pop()+')...');
-    for(const t of tries){
+    for(const t of (typeof tries==='function'?tries(m):tries)){
       try{return{out:await chat(key,m,msgs,t),used:m}}
       catch(e){last=e;errs.push(m.split('/').pop()+': '+e.message);
         if([401,413,429].includes(e.status)||e.trunc){e.message=errs.slice(-2).join(' | ');throw e}}
@@ -345,13 +346,12 @@ async function run(rev){
     let desc='';
     if(!rev&&imgData){
       const vc=candidates(list,true).slice(0,3);
-      const r=await ask(key,vc,[{role:'system',content:DESC},{role:'user',content:[{type:'text',text:txt||'Describe this subject.'},{type:'image_url',image_url:{url:imgData}}]}],[{max_tokens:1500,reasoning_effort:'none'},{max_tokens:1500}],'Menganalisis gambar');
+      const r=await ask(key,vc,[{role:'system',content:DESC},{role:'user',content:[{type:'text',text:txt||'Describe this subject.'},{type:'image_url',image_url:{url:imgData}}]}],m=>{const e=eff(m);return[e?{max_tokens:1500,reasoning_effort:e}:{max_tokens:1500},{max_tokens:1500}]},'Menganalisis gambar');
       desc=lastDesc=clean(r.out);
     }else if(rev)desc=lastDesc;
     const base=rev?'CURRENT MODEL JSON:\n'+JSON.stringify({parts:sceneParts()})+(desc?'\nSUBJECT DESCRIPTION:\n'+desc:'')+'\nINSTRUCTION: '+(txt||'Improve the likeness and add missing details.')
       :desc?'SUBJECT DESCRIPTION (from the reference image):\n'+desc+'\n\nUSER NOTE: '+(txt||'none'):txt;
-    const J={response_format:{type:'json_object'},max_tokens:4500};
-    const r=await ask(key,tc,[{role:'system',content:SYS},{role:'user',content:base}],[{...J,reasoning_effort:'none'},J,{max_tokens:4500}],'Membangun model');
+        const r=await ask(key,tc,[{role:'system',content:SYS},{role:'user',content:base}],m=>{const e=eff(m),J={response_format:{type:'json_object'},max_tokens:5500};return[e?{...J,reasoning_effort:e}:J,{max_tokens:5500}]},'Membangun model');
     const mt=clean(r.out).match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
     let j;try{j=JSON.parse(mt[0])}catch(e){throw new Error('JSON dari model rusak, coba lagi')}
     const n=build(j.parts||[],rev);
