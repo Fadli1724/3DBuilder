@@ -46,7 +46,7 @@ button.acc{background:var(--acc);color:#10231b;border-color:var(--acc);font-weig
 </head>
 <body>
 <canvas id="v"></canvas>
-<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v3</small></b><span id="info">0 objek</span></div>
+<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v4</small></b><span id="info">0 objek</span></div>
 <div id="toast"></div>
 <div id="bar">
   <div class="row" id="shapes">
@@ -79,7 +79,7 @@ button.acc{background:var(--acc);color:#10231b;border-color:var(--acc);font-weig
   <textarea id="pr" rows="3" placeholder="Contoh: robot kecil warna biru dengan antena"></textarea>
   <div class="kr"><label class="b" for="img">Tambah gambar</label><input id="img" type="file" accept="image/*" hidden><label class="chk"><input type="checkbox" id="rep" checked> Ganti scene</label></div>
   <div id="prev"><img id="thumb" alt=""><button id="imgx">Hapus gambar</button></div>
-  <button id="gen" class="acc">Buat 3D</button>
+  <div class="kr"><button id="gen" class="acc" style="flex:1">Buat 3D</button><button id="rev" style="flex:1">Revisi hasil</button></div>
   <div id="st"></div>
  </div>
 </div>
@@ -274,8 +274,16 @@ function candidates(list,vision){
   }
   return [...new Set([...rank(list,[/llama-3\.3-70b/,/gpt-oss-120b/,/llama-4-maverick/,/llama-4-scout/,/qwen/,/llama/]),...list])];
 }
-const SYS=`You design low-poly 3D characters and objects from primitive shapes. Reply with ONLY a JSON object: {"parts":[{"n":"name","shape":"box|sphere|cyl|cone|torus|plane","pos":[x,y,z],"size":[x,y,z],"rot":[rx,ry,rz],"color":"#rrggbb","mirror":false}]}.
-Rules: Y is up, feet rest on y=0, a character is about 3 units tall, it faces +Z. pos is the part's center. size is full width/height/depth (cyl: x and z are the diameter, y is the height; cone: x and z are the base diameter, y is the height; sphere: diameter). rot is in degrees. mirror:true adds a copy with x negated, so use it for arms, legs, eyes, ears and give those parts x>0. Use 10 to 30 parts with distinct colors: head, body, limbs, face details, accessories. If an image is given, match its shapes and colors.`;
+const SYS=`You are a 3D modeler who builds a recognizable low-poly model of a character or object from primitive shapes. Reply with ONLY a JSON object: {"parts":[{"n":"name","shape":"box|sphere|cyl|cone|torus|plane","pos":[x,y,z],"size":[x,y,z],"rot":[rx,ry,rz],"color":"#rrggbb","mirror":false}]}.
+Coordinates: Y is up, feet rest on y=0, the model is about 3 units tall, it faces +Z. pos is the part's center. size is full width/height/depth (cyl: x and z are the diameter, y is the height; cone: x and z are the base diameter, y is the height; sphere: diameter). rot is in degrees. mirror:true adds a copy with x negated, so use it for symmetric pairs (give those parts x>0). Round numbers to 2 decimals.
+Quality rules:
+1. First decide the true proportions (width:height:depth) of the subject from the image or description and respect them. A square-shaped subject must be about as wide as tall; never default to tall and thin.
+2. Build in layers: main body first, then EVERY distinctive visible feature as its own small part (clothes, patterns, spots or holes, nose, mouth, teeth, cheeks, eyebrows, hair, shoes, accessories).
+3. Place surface details ON the surface, slightly in front of it (front surface z = body depth/2, so detail z = depth/2 + 0.03), otherwise they are hidden inside the body.
+4. Use thin boxes (depth about 0.05) for clothes, patches and stickers; a white sphere with a smaller dark sphere in front for eyes; cylinders for limbs.
+5. Copy the dominant colors of the image exactly.
+6. Use 25 to 40 parts.
+If you receive a CURRENT MODEL JSON, apply the INSTRUCTION to it and return the FULL updated JSON with all parts.`;
 async function chat(key,model,messages,extra){
   const body=Object.assign({model,messages,temperature:.4,max_tokens:3500},extra||{});
   const r=await fetch(API+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)});
@@ -284,8 +292,8 @@ async function chat(key,model,messages,extra){
   if(c.finish_reason==='length'){const er=new Error('Jawaban terpotong, coba deskripsi lebih singkat');er.trunc=1;throw er}
   return c.message.content||'';
 }
-function build(parts){
-  if($('#rep').checked){select(null);world.children.slice().forEach(o=>{world.remove(o);o.geometry.dispose();o.material.dispose()})}
+function build(parts,force){
+  if(force||$('#rep').checked){select(null);world.children.slice().forEach(o=>{world.remove(o);o.geometry.dispose();o.material.dispose()})}
   const num=(a,d)=>Array.isArray(a)&&a.length>=3?a.slice(0,3).map(x=>isFinite(+x)?+x:0):d;
   let n=0;
   parts.slice(0,60).forEach(p=>{
@@ -304,16 +312,20 @@ function build(parts){
   orbit.target.set(0,1.4,0);cam.position.set(4,3,6.5);
   return n;
 }
-$('#gen').onclick=async()=>{
-  const key=$('#key').value.trim(),txt=$('#pr').value.trim(),btn=$('#gen');
+const r2=x=>Math.round(x*100)/100;
+function sceneParts(){return world.children.map(m=>({shape:m.userData.kind,pos:m.position.toArray().map(r2),size:m.scale.toArray().map(r2),rot:[m.rotation.x,m.rotation.y,m.rotation.z].map(x=>r2(x*180/Math.PI)),color:'#'+m.material.color.getHexString()}))}
+async function run(rev){
+  const key=$('#key').value.trim(),txt=$('#pr').value.trim(),btn={set disabled(v){$('#gen').disabled=$('#rev').disabled=v}};
   if(!key)return st('Isi API key Groq dulu',1);
+  if(rev&&!world.children.length)return st('Scene kosong, buat dulu',1);
   if(!txt&&!imgData)return st('Tulis deskripsi atau tambah gambar',1);
   btn.disabled=true;
   try{
     store.set(KEY,key);st('Mencari model...');
     const cands=candidates(await listModels(key),!!imgData).slice(0,4);
     if(!cands.length)throw new Error('Tidak ada model tersedia di akun ini');
-    const content=imgData?[{type:'text',text:txt||'Buat model 3D dari gambar ini.'},{type:'image_url',image_url:{url:imgData}}]:txt;
+    const base=rev?'CURRENT MODEL JSON:\n'+JSON.stringify({parts:sceneParts()})+'\nINSTRUCTION: '+(txt||'Improve the likeness to the image.'):(txt||'Buat model 3D dari gambar ini.');
+    const content=imgData?[{type:'text',text:base},{type:'image_url',image_url:{url:imgData}}]:base;
     const msgs=[{role:'system',content:SYS},{role:'user',content}];
     const tries=[{response_format:{type:'json_object'},reasoning_effort:'none'},{response_format:{type:'json_object'}},{}];
     let out=null,used,last,errs=[];
@@ -328,14 +340,16 @@ $('#gen').onclick=async()=>{
     out=out.replace(/<think>[\s\S]*?<\/think>/g,'');
     const mt=out.match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
     let j;try{j=JSON.parse(mt[0])}catch(e){throw new Error('JSON dari model rusak, coba lagi')}
-    const n=build(j.parts||[]);
+    const n=build(j.parts||[],rev);
     if(!n)throw new Error('Model tidak menghasilkan bagian apa pun, coba lagi');
     st('Selesai: '+n+' bagian ('+used+')');
   }catch(e){
     st(e.status===401?'API key tidak valid':e.status===429?'Limit Groq tercapai, tunggu sebentar lalu coba lagi':e.status===413?'Request terlalu besar, coba gambar lain atau teks lebih singkat':(e.message||'Gagal'),1);
   }
   btn.disabled=false;
-};
+}
+$('#gen').onclick=()=>run(false);
+$('#rev').onclick=()=>run(true);
 
 addMesh('box','#4fd1a5');
 addMesh('sphere','#e8a14f').position.set(2,.6,0);
