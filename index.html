@@ -46,7 +46,7 @@ button.acc{background:var(--acc);color:#10231b;border-color:var(--acc);font-weig
 </head>
 <body>
 <canvas id="v"></canvas>
-<div id="top"><b>Mini 3D Editor</b><span id="info">0 objek</span></div>
+<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v3</small></b><span id="info">0 objek</span></div>
 <div id="toast"></div>
 <div id="bar">
   <div class="row" id="shapes">
@@ -236,7 +236,14 @@ $('#key').value=store.get(KEY)||'';
 function st(t,err){const e=$('#st');e.textContent=t;e.style.color=err?'#ff8a80':'var(--mut)'}
 $('#ai').onclick=()=>{const o=$('#panel').classList.toggle('open');$('#ai').classList.toggle('on',o)};
 $('#pc').onclick=()=>{$('#panel').classList.remove('open');$('#ai').classList.remove('on')};
-$('#ksave').onclick=()=>{store.set(KEY,$('#key').value.trim());models=null;st('Key disimpan di browser ini')};
+$('#ksave').onclick=async()=>{
+  const k=$('#key').value.trim();store.set(KEY,k);models=null;
+  if(!k)return st('Key kosong',1);
+  st('Mengecek model...');
+  try{const l=await listModels(k);const v=candidates(l,true).slice(0,3);
+    st('Key OK, '+l.length+' model. Untuk gambar akan dicoba: '+v.join(', '))}
+  catch(e){st(e.message,1)}
+};
 $('#img').onchange=e=>{
   const f=e.target.files[0];if(!f)return;
   const im=new Image(),u=URL.createObjectURL(f);
@@ -269,12 +276,13 @@ function candidates(list,vision){
 }
 const SYS=`You design low-poly 3D characters and objects from primitive shapes. Reply with ONLY a JSON object: {"parts":[{"n":"name","shape":"box|sphere|cyl|cone|torus|plane","pos":[x,y,z],"size":[x,y,z],"rot":[rx,ry,rz],"color":"#rrggbb","mirror":false}]}.
 Rules: Y is up, feet rest on y=0, a character is about 3 units tall, it faces +Z. pos is the part's center. size is full width/height/depth (cyl: x and z are the diameter, y is the height; cone: x and z are the base diameter, y is the height; sphere: diameter). rot is in degrees. mirror:true adds a copy with x negated, so use it for arms, legs, eyes, ears and give those parts x>0. Use 10 to 30 parts with distinct colors: head, body, limbs, face details, accessories. If an image is given, match its shapes and colors.`;
-async function chat(key,model,messages,json){
-  const body={model,messages,temperature:.4,max_tokens:4000};
-  if(json)body.response_format={type:'json_object'};
+async function chat(key,model,messages,extra){
+  const body=Object.assign({model,messages,temperature:.4,max_tokens:3500},extra||{});
   const r=await fetch(API+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)});
   if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}const er=new Error(m||('Error '+r.status));er.status=r.status;throw er}
-  return (await r.json()).choices[0].message.content;
+  const c=(await r.json()).choices[0];
+  if(c.finish_reason==='length'){const er=new Error('Jawaban terpotong, coba deskripsi lebih singkat');er.trunc=1;throw er}
+  return c.message.content||'';
 }
 function build(parts){
   if($('#rep').checked){select(null);world.children.slice().forEach(o=>{world.remove(o);o.geometry.dispose();o.material.dispose()})}
@@ -303,25 +311,28 @@ $('#gen').onclick=async()=>{
   btn.disabled=true;
   try{
     store.set(KEY,key);st('Mencari model...');
-    const cands=candidates(await listModels(key),!!imgData).slice(0,3);
-    if(!cands.length)throw new Error(imgData?'Akun ini tidak punya model yang bisa baca gambar':'Tidak ada model chat tersedia');
+    const cands=candidates(await listModels(key),!!imgData).slice(0,4);
+    if(!cands.length)throw new Error('Tidak ada model tersedia di akun ini');
     const content=imgData?[{type:'text',text:txt||'Buat model 3D dari gambar ini.'},{type:'image_url',image_url:{url:imgData}}]:txt;
     const msgs=[{role:'system',content:SYS},{role:'user',content}];
-    let out=null,used,last;
-    for(const m of cands){
+    const tries=[{response_format:{type:'json_object'},reasoning_effort:'none'},{response_format:{type:'json_object'}},{}];
+    let out=null,used,last,errs=[];
+    outer:for(const m of cands){
       st('Membuat dengan '+m+'...');
-      try{
-        try{out=await chat(key,m,msgs,true)}catch(e){if(e.status===400)out=await chat(key,m,msgs,false);else throw e}
-        used=m;break;
-      }catch(e){last=e;if(e.status===401||e.status===429)break}
+      for(const t of tries){
+        try{out=await chat(key,m,msgs,t);used=m;break outer}
+        catch(e){last=e;errs.push(m.split('/').pop()+': '+e.message);if([401,413,429].includes(e.status)||e.trunc)break outer}
+      }
     }
-    if(!out)throw last;
-    out=out.replace(/<think>[\s\S]*?<\/think>/g,'');const mt=out.match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
-    const n=build(JSON.parse(mt[0]).parts||[]);
+    if(!out){last.message=errs.slice(-2).join(' | ');throw last}
+    out=out.replace(/<think>[\s\S]*?<\/think>/g,'');
+    const mt=out.match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
+    let j;try{j=JSON.parse(mt[0])}catch(e){throw new Error('JSON dari model rusak, coba lagi')}
+    const n=build(j.parts||[]);
     if(!n)throw new Error('Model tidak menghasilkan bagian apa pun, coba lagi');
     st('Selesai: '+n+' bagian ('+used+')');
   }catch(e){
-    st(e.status===401?'API key tidak valid':e.status===429?'Limit Groq tercapai, coba lagi sebentar':(e.message||'Gagal'),1);
+    st(e.status===401?'API key tidak valid':e.status===429?'Limit Groq tercapai, tunggu sebentar lalu coba lagi':e.status===413?'Request terlalu besar, coba gambar lain atau teks lebih singkat':(e.message||'Gagal'),1);
   }
   btn.disabled=false;
 };
