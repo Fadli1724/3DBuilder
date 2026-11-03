@@ -46,7 +46,7 @@ button.acc{background:var(--acc);color:#10231b;border-color:var(--acc);font-weig
 </head>
 <body>
 <canvas id="v"></canvas>
-<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v6</small></b><span id="info">0 objek</span></div>
+<div id="top"><b>Mini 3D Editor <small style="color:var(--mut);font-weight:400">v7</small></b><span id="info">0 objek</span></div>
 <div id="toast"></div>
 <div id="bar">
   <div class="row" id="shapes">
@@ -276,17 +276,18 @@ function candidates(list,vision){
   }
   return [...new Set([...rank(list,[/llama-3\.3-70b/,/gpt-oss-120b/,/llama-4-maverick/,/llama-4-scout/,/qwen/,/llama/]),...list])];
 }
-const SYS=`You are a 3D modeler who builds a detailed, recognizable low-poly model of a character or object from primitive shapes. Reply with ONLY a JSON object: {"parts":[{"shape":"box|sphere|cyl|cone|torus|plane|dome|pyramid","pos":[x,y,z],"size":[x,y,z],"rot":[rx,ry,rz],"color":"#rrggbb","mirror":false}]}.
-Coordinates: Y is up, feet rest on y=0, the model is about 3 units tall, it faces +Z. pos is the part's center. size is the full width/height/depth (cyl: x and z are the diameter, y the height; cone and pyramid: x and z are the base size, y the height; sphere: diameter; dome: a half sphere with flat base, x and z diameter, y height). rot is in degrees. mirror:true adds a copy with x negated; use it for symmetric pairs and give those parts x>0. Round numbers to 2 decimals.
-Quality rules:
-1. Respect the true proportions (width:height:depth) of the subject. A square-shaped subject must be about as wide as tall; never default to tall and thin.
-2. Build in layers: main body first, then EVERY distinctive feature as its own part (clothes, patterns, spots, holes, nose, mouth, teeth, cheeks, eyebrows, hair, shoes, accessories).
-3. Place surface details ON the surface, slightly in front of it (if the body front surface is at z = depth/2, put the detail at z = depth/2 + 0.03), otherwise they are hidden inside the body.
-4. Use thin boxes (depth about 0.05) for clothes, patches and stickers; a white sphere with a smaller dark sphere in front for eyes; domes for cheeks and hair; cylinders for limbs.
-5. Use the exact colors given in the description or image.
-6. Use 30 to 50 parts.
-If you receive a CURRENT MODEL JSON, apply the INSTRUCTION to it and return the FULL updated JSON with all parts.`;
-const DESC=`You analyze a reference image for a 3D modeler. Reply in plain text under 300 words with: 1) the subject and its overall shape, 2) its real proportions width:height:depth, 3) every part (body, head, limbs, clothes, face details, patterns) with its shape, approximate size relative to the body height, position, and exact hex color, 4) distinctive features that must not be missed.`;
+const SYS=`You are a 3D modeler who builds a detailed, recognizable low-poly model of a character or object from primitive shapes, assembled as a hierarchy. Reply with ONLY a JSON object: {"parts":[{"id":"name","shape":"box|sphere|cyl|cone|torus|plane|dome|pyramid","size":[w,h,d],"color":"#rrggbb","parent":"id of an EARLIER part","face":"top|bottom|front|back|left|right","u":0,"v":0,"rot":[rx,ry,rz],"mirror":false}]}.
+Sizes: units where the whole model is about 3 units tall. size = full width (x), height (y), depth (z). cyl: x and z are the diameter, y the height. cone and pyramid: x and z are the base, y the height. sphere: diameter. dome: half sphere with a flat bottom.
+You NEVER give coordinates. Placement is automatic:
+- The first part has no parent (it is the main body). All other parts have a parent and a face of that parent they are attached to. top = above it, bottom = below it, front = the side facing the viewer (+z), back, left (-x), right (+x).
+- u and v (each from -1 to 1) slide the part along that face from its center. front/back: u = left to right, v = down to up. left/right: u = back to front, v = down to up. top/bottom: u = left to right, v = back to front.
+- mirror:true also adds the left-right mirrored copy, so put the part on the right side (u>0, or face right). Children of a mirrored part are mirrored automatically.
+- rot is in degrees and optional.
+Quality rules: respect the true proportions of the subject (a square subject is as wide as tall; a fat subject is wide). Add EVERY distinctive feature as its own part (clothes, patterns, spots, nose, mouth, teeth, cheeks, eyebrows, hair, shoes, accessories) attached to the right parent. Use thin boxes (depth about 0.05) for patches and stripes, a white sphere with a smaller dark sphere attached to its front for eyes, domes for cheeks and hair. Use the exact colors from the description. Use 25 to 45 parts.
+Example: {"parts":[{"id":"body","shape":"box","size":[2.2,2.0,0.8],"color":"#ffd400"},{"id":"head","shape":"sphere","size":[1.4,1.2,1.0],"color":"#ffd400","parent":"body","face":"top"},{"id":"eye","shape":"sphere","size":[0.4,0.4,0.3],"color":"#ffffff","parent":"head","face":"front","u":0.45,"v":0.2,"mirror":true},{"id":"pupil","shape":"sphere","size":[0.15,0.15,0.1],"color":"#000000","parent":"eye","face":"front"},{"id":"arm","shape":"cyl","size":[0.3,1.4,0.3],"color":"#ffd400","parent":"body","face":"right","v":0.2,"mirror":true},{"id":"leg","shape":"cyl","size":[0.3,1.2,0.3],"color":"#ffd400","parent":"body","face":"bottom","u":0.5,"mirror":true}]}
+If you receive a CURRENT MODEL JSON, apply the INSTRUCTION and return the FULL updated JSON with all parts.`;
+const DESC=`You analyze a reference image for a 3D modeler. Reply in plain text under 300 words, as a hierarchy: 1) the subject and the true proportions of its main body (width:height:depth), 2) the main body shape and color, 3) what is attached to what (head on top of the body, eyes on the front of the head, arms on the sides, legs below, clothes and patterns on the body), each with its shape, its size in units where the whole subject is 3 tall, and an exact hex color, 4) distinctive features that must not be missed.`;
+let lastParts=null;
 let lastDesc='';
 const eff=m=>/gpt-oss/.test(m)?'low':/qwen3/.test(m)?'none':null;
 const clean=o=>o.replace(/<think>[\s\S]*?<\/think>/g,'').trim();
@@ -313,29 +314,49 @@ async function chat(key,model,messages,extra){
 function build(parts,force){
   if(force||$('#rep').checked){select(null);world.children.slice().forEach(o=>{world.remove(o);o.geometry.dispose();o.material.dispose()})}
   const num=(a,d)=>Array.isArray(a)&&a.length>=3?a.slice(0,3).map(x=>isFinite(+x)?+x:0):d;
-  let n=0;
-  parts.slice(0,60).forEach(p=>{
+  const ent={},made=[],f=.85;
+  parts.slice(0,70).forEach((p,i)=>{
     if(!p||!geos[p.shape])return;
-    const pos=num(p.pos,[0,1,0]),sz=num(p.size,[1,1,1]).map(x=>Math.max(.02,Math.abs(x))),rot=num(p.rot,[0,0,0]).map(d=>d*Math.PI/180);
-    const c=/^#[0-9a-f]{6}$/i.test(p.color)?p.color:'#cccccc';
-    const add=mir=>{
-      const m=mk(p.shape,c);m.scale.set(...sz);
-      m.position.set(mir?-pos[0]:pos[0],pos[1],pos[2]);
-      m.rotation.set(rot[0],mir?-rot[1]:rot[1],mir?-rot[2]:rot[2]);
-      world.add(m);n++;
+    const sz=num(p.size,[1,1,1]).map(x=>Math.max(.02,Math.abs(x))),rot=num(p.rot,[0,0,0]).map(d=>d*Math.PI/180);
+    const par=p.parent!=null?ent[p.parent]:null,u=+p.u||0,v=+p.v||0,[cw,ch,cd]=sz;
+    let pos,mir=!!p.mirror;
+    if(par){
+      const [pw,ph,pd]=par.sz,P=par.pos,top=p.face==='top',X=(par.mir&&top)?0:P[0];
+      if(par.mir&&!top)mir=true;
+      switch(p.face){
+        case 'top':pos=[X+u*pw/2,P[1]+ph/2+ch/2*f,P[2]+v*pd/2];break;
+        case 'bottom':pos=[X+u*pw/2,P[1]-ph/2-ch/2*f,P[2]+v*pd/2];break;
+        case 'back':pos=[X+u*pw/2,P[1]+v*ph/2,P[2]-pd/2-cd/2*f];break;
+        case 'right':pos=[X+pw/2+cw/2*f,P[1]+v*ph/2,P[2]+u*pd/2];break;
+        case 'left':pos=[X-pw/2-cw/2*f,P[1]+v*ph/2,P[2]+u*pd/2];break;
+        default:pos=[X+u*pw/2,P[1]+v*ph/2,P[2]+pd/2+cd/2*f];
+      }
+    }else pos=Array.isArray(p.pos)?num(p.pos,[0,0,0]):[0,0,0];
+    ent[p.id!=null?p.id:i]={pos,sz,mir};
+    const add=m2=>{
+      const m=mk(p.shape,/^#[0-9a-f]{6}$/i.test(p.color)?p.color:'#cccccc');m.scale.set(...sz);
+      m.position.set(m2?-pos[0]:pos[0],pos[1],pos[2]);
+      m.rotation.set(rot[0],m2?-rot[1]:rot[1],m2?-rot[2]:rot[2]);
+      world.add(m);made.push(m);
     };
-    add(false);if(p.mirror&&Math.abs(pos[0])>.01)add(true);
+    add(false);if(mir&&Math.abs(pos[0])>.01)add(true);
   });
   select(null);count();
-  orbit.target.set(0,1.4,0);cam.position.set(4,3,6.5);
-  return n;
+  if(made.length){
+    world.updateMatrixWorld(true);
+    const bb=new THREE.Box3();made.forEach(m=>bb.expandByObject(m));
+    const dy=-bb.min.y;made.forEach(m=>m.position.y+=dy);bb.translate(new THREE.Vector3(0,dy,0));
+    const c=bb.getCenter(new THREE.Vector3()),sv=bb.getSize(new THREE.Vector3()),d=Math.max(sv.x,sv.y,sv.z)*1.6+1.5;
+    orbit.target.copy(c);cam.position.set(c.x+d*.3,c.y+d*.2,c.z+d);
+  }
+  return made.length;
 }
 const r2=x=>Math.round(x*100)/100;
 function sceneParts(){return world.children.map(m=>({shape:m.userData.kind,pos:m.position.toArray().map(r2),size:m.scale.toArray().map(r2),rot:[m.rotation.x,m.rotation.y,m.rotation.z].map(x=>r2(x*180/Math.PI)),color:'#'+m.material.color.getHexString()}))}
 async function run(rev){
   const key=$('#key').value.trim(),txt=$('#pr').value.trim(),btn={set disabled(v){$('#gen').disabled=$('#rev').disabled=v}};
   if(!key)return st('Isi API key Groq dulu',1);
-  if(rev&&!world.children.length)return st('Scene kosong, buat dulu',1);
+  if(rev&&!lastParts)return st('Buat dulu dengan AI, baru bisa direvisi',1);
   if(!txt&&!imgData)return st('Tulis deskripsi atau tambah gambar',1);
   btn.disabled=true;
   try{
@@ -349,13 +370,14 @@ async function run(rev){
       const r=await ask(key,vc,[{role:'system',content:DESC},{role:'user',content:[{type:'text',text:txt||'Describe this subject.'},{type:'image_url',image_url:{url:imgData}}]}],m=>{const e=eff(m);return[e?{max_tokens:1500,reasoning_effort:e}:{max_tokens:1500},{max_tokens:1500}]},'Menganalisis gambar');
       desc=lastDesc=clean(r.out);
     }else if(rev)desc=lastDesc;
-    const base=rev?'CURRENT MODEL JSON:\n'+JSON.stringify({parts:sceneParts()})+(desc?'\nSUBJECT DESCRIPTION:\n'+desc:'')+'\nINSTRUCTION: '+(txt||'Improve the likeness and add missing details.')
+    const base=rev?'CURRENT MODEL JSON:\n'+JSON.stringify({parts:lastParts})+(desc?'\nSUBJECT DESCRIPTION:\n'+desc:'')+'\nINSTRUCTION: '+(txt||'Improve the likeness and add missing details.')
       :desc?'SUBJECT DESCRIPTION (from the reference image):\n'+desc+'\n\nUSER NOTE: '+(txt||'none'):txt;
         const r=await ask(key,tc,[{role:'system',content:SYS},{role:'user',content:base}],m=>{const e=eff(m),J={response_format:{type:'json_object'},max_tokens:5500};return[e?{...J,reasoning_effort:e}:J,{max_tokens:5500}]},'Membangun model');
     const mt=clean(r.out).match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
     let j;try{j=JSON.parse(mt[0])}catch(e){throw new Error('JSON dari model rusak, coba lagi')}
     const n=build(j.parts||[],rev);
     if(!n)throw new Error('Model tidak menghasilkan bagian apa pun, coba lagi');
+    lastParts=j.parts;
     st('Selesai: '+n+' bagian ('+r.used.split('/').pop()+')');
   }catch(e){
     st(e.status===401?'API key tidak valid':e.status===429?'Limit Groq tercapai, tunggu sebentar lalu coba lagi':e.status===413?'Request terlalu besar, coba gambar lain atau teks lebih singkat':(e.message||'Gagal'),1);
