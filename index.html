@@ -260,14 +260,17 @@ async function listModels(key){
 }
 function rank(list,prefs){const o=[];prefs.forEach(p=>list.forEach(id=>{if(p.test(id)&&!o.includes(id))o.push(id)}));return o}
 function candidates(list,vision){
-  const v=rank(list,[/llama-4-maverick/,/llama-4-scout/,/vision/]);
-  if(vision)return v;
+  if(vision){
+    const q=list.filter(id=>/qwen3\.\d/.test(id)).sort((a,b)=>b.localeCompare(a,undefined,{numeric:true}));
+    const v=[...new Set([...q,...rank(list,[/llama-4-maverick/,/llama-4-scout/,/vision|-vl/])])];
+    return v.length?v:list;
+  }
   return [...new Set([...rank(list,[/llama-3\.3-70b/,/gpt-oss-120b/,/llama-4-maverick/,/llama-4-scout/,/qwen/,/llama/]),...list])];
 }
 const SYS=`You design low-poly 3D characters and objects from primitive shapes. Reply with ONLY a JSON object: {"parts":[{"n":"name","shape":"box|sphere|cyl|cone|torus|plane","pos":[x,y,z],"size":[x,y,z],"rot":[rx,ry,rz],"color":"#rrggbb","mirror":false}]}.
 Rules: Y is up, feet rest on y=0, a character is about 3 units tall, it faces +Z. pos is the part's center. size is full width/height/depth (cyl: x and z are the diameter, y is the height; cone: x and z are the base diameter, y is the height; sphere: diameter). rot is in degrees. mirror:true adds a copy with x negated, so use it for arms, legs, eyes, ears and give those parts x>0. Use 10 to 30 parts with distinct colors: head, body, limbs, face details, accessories. If an image is given, match its shapes and colors.`;
 async function chat(key,model,messages,json){
-  const body={model,messages,temperature:.4,max_tokens:3000};
+  const body={model,messages,temperature:.4,max_tokens:4000};
   if(json)body.response_format={type:'json_object'};
   const r=await fetch(API+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)});
   if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}const er=new Error(m||('Error '+r.status));er.status=r.status;throw er}
@@ -313,7 +316,7 @@ $('#gen').onclick=async()=>{
       }catch(e){last=e;if(e.status===401||e.status===429)break}
     }
     if(!out)throw last;
-    const mt=out.match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
+    out=out.replace(/<think>[\s\S]*?<\/think>/g,'');const mt=out.match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
     const n=build(JSON.parse(mt[0]).parts||[]);
     if(!n)throw new Error('Model tidak menghasilkan bagian apa pun, coba lagi');
     st('Selesai: '+n+' bagian ('+used+')');
