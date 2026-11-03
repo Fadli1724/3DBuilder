@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1b1d22">
+<title>Mini 3D Editor</title>
+<style>
+:root{--bg:#1b1d22;--panel:#262930;--line:#383c46;--text:#e8eaef;--mut:#9aa0ad;--acc:#4fd1a5}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font:14px/1.2 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overscroll-behavior:none}
+#v{position:fixed;top:0;left:0;width:100%;height:calc(100% - var(--bh,130px));display:block}
+#top{position:fixed;top:0;left:0;right:0;padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 8px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+#top b{font-size:15px}
+#info{color:var(--mut);font-size:12px}
+#bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:8px 8px calc(env(safe-area-inset-bottom,0px) + 8px)}
+.row{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}
+.row::-webkit-scrollbar{display:none}
+.row+.row{margin-top:6px}
+button,label.b{flex:0 0 auto;min-width:52px;height:44px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:#2f333c;color:var(--text);font:inherit;display:flex;align-items:center;justify-content:center;gap:6px}
+button:active,label.b:active{background:#3b404b}
+button.on{background:var(--acc);color:#10231b;border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.35}
+input[type=color]{width:0;height:0;opacity:0;position:absolute;pointer-events:none}
+#sw{width:18px;height:18px;border-radius:50%;border:2px solid #fff;background:#4fd1a5}
+.sep{flex:0 0 1px;background:var(--line);margin:4px 2px}
+#toast{position:fixed;left:50%;top:60px;transform:translateX(-50%);background:#000c;padding:8px 14px;border-radius:20px;opacity:0;transition:opacity .2s;pointer-events:none}
+#v{touch-action:none}
+input,textarea{user-select:text;-webkit-user-select:text}
+#panel{position:fixed;left:0;right:0;bottom:var(--bh,130px);background:var(--panel);border-top:1px solid var(--line);border-radius:14px 14px 0 0;max-height:60%;display:none;flex-direction:column;z-index:5}
+#panel.open{display:flex}
+.ph{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid var(--line)}
+.ph button{height:34px;min-width:0}
+.pb{padding:10px 12px;display:flex;flex-direction:column;gap:8px;overflow-y:auto}
+.pb small,#st{color:var(--mut);font-size:12px;line-height:1.4}
+.f{display:flex;flex-direction:column;gap:4px;color:var(--mut);font-size:12px}
+input[type=password],textarea{width:100%;background:#1b1d22;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;font-size:16px}
+textarea{resize:none}
+.kr{display:flex;gap:8px;align-items:center}
+.kr input[type=password]{flex:1}
+.chk{display:flex;align-items:center;gap:6px}
+#prev{display:none;align-items:center;gap:10px}
+#thumb{width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+button.acc{background:var(--acc);color:#10231b;border-color:var(--acc);font-weight:600}
+</style>
+</head>
+<body>
+<canvas id="v"></canvas>
+<div id="top"><b>Mini 3D Editor</b><span id="info">0 objek</span></div>
+<div id="toast"></div>
+<div id="bar">
+  <div class="row" id="shapes">
+    <button data-s="box">Kubus</button><button data-s="sphere">Bola</button>
+    <button data-s="cyl">Tabung</button><button data-s="cone">Kerucut</button>
+    <button data-s="torus">Donat</button><button data-s="plane">Bidang</button>
+  </div>
+  <div class="row" id="acts">
+    <button id="ai">AI</button>
+    <button id="mM" class="on" data-m="translate">Geser</button>
+    <button data-m="rotate">Putar</button>
+    <button data-m="scale">Skala</button>
+    <div class="sep"></div>
+    <label class="b"><span id="sw"></span><input type="color" id="col" value="#4fd1a5"></label>
+    <button id="snap">Snap</button>
+    <button id="dup">Duplikat</button>
+    <button id="del">Hapus</button>
+    <div class="sep"></div>
+    <button id="exp">Export .glb</button>
+    <button id="save">Simpan</button>
+    <button id="load">Buka</button>
+  </div>
+</div>
+
+<div id="panel">
+ <div class="ph"><b>AI Karakter</b><button id="pc">Tutup</button></div>
+ <div class="pb">
+  <label class="f">API key Groq<div class="kr"><input id="key" type="password" placeholder="gsk_..." autocomplete="off"><button id="ksave">Simpan</button></div></label>
+  <small>Key hanya disimpan di browser HP ini. Model dipilih otomatis dari akun Groq kamu.</small>
+  <textarea id="pr" rows="3" placeholder="Contoh: robot kecil warna biru dengan antena"></textarea>
+  <div class="kr"><label class="b" for="img">Tambah gambar</label><input id="img" type="file" accept="image/*" hidden><label class="chk"><input type="checkbox" id="rep" checked> Ganti scene</label></div>
+  <div id="prev"><img id="thumb" alt=""><button id="imgx">Hapus gambar</button></div>
+  <button id="gen" class="acc">Buat 3D</button>
+  <div id="st"></div>
+ </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+<script>
+const $=s=>document.querySelector(s);
+const canvas=$('#v');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x1b1d22);
+const cam=new THREE.PerspectiveCamera(50,1,.1,200);
+cam.position.set(5,4,6);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x3a3f4b,.9));
+const sun=new THREE.DirectionalLight(0xffffff,.8);sun.position.set(5,10,6);scene.add(sun);
+const grid=new THREE.GridHelper(20,20,0x555b69,0x2e323b);scene.add(grid);
+
+const world=new THREE.Group();scene.add(world);
+
+const orbit=new THREE.OrbitControls(cam,canvas);
+orbit.enableDamping=true;orbit.dampingFactor=.12;
+const tc=new THREE.TransformControls(cam,canvas);
+tc.setSize(1.2);
+scene.add(tc);
+tc.addEventListener('dragging-changed',e=>{orbit.enabled=!e.value});
+
+let sel=null,color='#4fd1a5',snap=false;
+
+function resize(){
+  document.documentElement.style.setProperty('--bh',$('#bar').offsetHeight+'px');
+  const w=canvas.clientWidth||innerWidth,h=canvas.clientHeight||innerHeight;
+  renderer.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();
+}
+addEventListener('resize',resize);
+if(window.ResizeObserver)new ResizeObserver(resize).observe(document.body);
+resize();
+
+function toast(t){const e=$('#toast');e.textContent=t;e.style.opacity=1;clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.opacity=0,1600)}
+function count(){$('#info').textContent=world.children.length+' objek'}
+function refresh(){
+  const has=!!sel;
+  ['dup','del'].forEach(i=>$('#'+i).disabled=!has);
+}
+
+const geos={
+  box:()=>new THREE.BoxGeometry(1,1,1),
+  sphere:()=>new THREE.SphereGeometry(.5,32,20),
+  cyl:()=>new THREE.CylinderGeometry(.5,.5,1,32),
+  cone:()=>new THREE.ConeGeometry(.5,1,32),
+  torus:()=>new THREE.TorusGeometry(.35,.15,16,40),
+  plane:()=>new THREE.PlaneGeometry(1,1)
+};
+const defSize={box:[1,1,1],sphere:[1.2,1.2,1.2],cyl:[1,1.2,1],cone:[1.2,1.2,1.2],torus:[1.4,1.4,1.4],plane:[2,2,1]};
+function mk(kind,c){
+  const m=new THREE.Mesh(geos[kind](),new THREE.MeshStandardMaterial({color:c||color,roughness:.55,metalness:.1,side:THREE.DoubleSide}));
+  m.userData.kind=kind;return m;
+}
+function addMesh(kind,c){
+  const m=mk(kind,c);m.scale.set(...defSize[kind]);
+  m.position.y=kind==='plane'?0:.6;
+  if(kind==='plane')m.rotation.x=-Math.PI/2;
+  world.add(m);select(m);count();
+  return m;
+}
+
+function select(o){
+  sel=o;
+  if(o){tc.attach(o);const h=o.material.color.getHexString();$('#sw').style.background='#'+h;$('#col').value='#'+h}
+  else tc.detach();
+  refresh();
+}
+
+// tap to select (ignore drags)
+let down=null;
+canvas.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY,t:performance.now()}});
+canvas.addEventListener('pointerup',e=>{
+  if(!down||tc.dragging)return;
+  const moved=Math.hypot(e.clientX-down.x,e.clientY-down.y);
+  if(moved>8||performance.now()-down.t>400)return;
+  const r=canvas.getBoundingClientRect();
+  const ndc=new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);
+  const ray=new THREE.Raycaster();ray.setFromCamera(ndc,cam);
+  const hit=ray.intersectObjects(world.children,false)[0];
+  select(hit?hit.object:null);
+});
+
+document.querySelectorAll('#shapes button').forEach(b=>b.onclick=()=>addMesh(b.dataset.s));
+document.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{
+  tc.setMode(b.dataset.m);
+  document.querySelectorAll('[data-m]').forEach(x=>x.classList.toggle('on',x===b));
+});
+$('#col').oninput=e=>{
+  color=e.target.value;$('#sw').style.background=color;
+  if(sel)sel.material.color.set(color);
+};
+$('#snap').onclick=function(){
+  snap=!snap;this.classList.toggle('on',snap);
+  tc.setTranslationSnap(snap?.5:null);
+  tc.setRotationSnap(snap?Math.PI/12:null);
+  tc.setScaleSnap(snap?.25:null);
+};
+$('#dup').onclick=()=>{
+  if(!sel)return;
+  const c=sel.clone();c.material=sel.material.clone();
+  c.position.x+=.8;world.add(c);select(c);count();
+};
+$('#del').onclick=()=>{
+  if(!sel)return;
+  const o=sel;select(null);world.remove(o);o.geometry.dispose();o.material.dispose();count();
+};
+
+function download(blob,name){
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+$('#exp').onclick=()=>{
+  if(!world.children.length)return toast('Belum ada objek');
+  tc.detach();
+  new THREE.GLTFExporter().parse(world,r=>{
+    download(new Blob([r],{type:'model/gltf-binary'}),'model.glb');
+    toast('model.glb tersimpan');if(sel)tc.attach(sel);
+  },{binary:true});
+};
+
+// save/load project as JSON (browser storage, with fallback to memory only)
+function serialize(){
+  return world.children.map(m=>({k:m.userData.kind,c:'#'+m.material.color.getHexString(),
+    p:m.position.toArray(),r:[m.rotation.x,m.rotation.y,m.rotation.z],s:m.scale.toArray()}));
+}
+$('#save').onclick=()=>{
+  try{localStorage.setItem('mini3d',JSON.stringify(serialize()));toast('Project disimpan')}
+  catch(e){toast('Penyimpanan diblokir browser')}
+};
+$('#load').onclick=()=>{
+  let d;
+  try{d=JSON.parse(localStorage.getItem('mini3d')||'null')}catch(e){d=null}
+  if(!d)return toast('Belum ada project tersimpan');
+  select(null);
+  world.children.slice().forEach(o=>{world.remove(o);o.geometry.dispose();o.material.dispose()});
+  d.forEach(i=>{const m=addMesh(i.k,i.c);m.position.fromArray(i.p);m.rotation.set(...i.r);m.scale.fromArray(i.s)});
+  select(null);toast('Project dibuka');
+};
+
+// ===== AI (Groq) =====
+const KEY='mini3d_groq',API='https://api.groq.com/openai/v1';
+let imgData=null,models=null;
+const store={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+$('#key').value=store.get(KEY)||'';
+function st(t,err){const e=$('#st');e.textContent=t;e.style.color=err?'#ff8a80':'var(--mut)'}
+$('#ai').onclick=()=>{const o=$('#panel').classList.toggle('open');$('#ai').classList.toggle('on',o)};
+$('#pc').onclick=()=>{$('#panel').classList.remove('open');$('#ai').classList.remove('on')};
+$('#ksave').onclick=()=>{store.set(KEY,$('#key').value.trim());models=null;st('Key disimpan di browser ini')};
+$('#img').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const im=new Image(),u=URL.createObjectURL(f);
+  im.onload=()=>{
+    const s=Math.min(1,1024/Math.max(im.width,im.height));
+    const c=document.createElement('canvas');c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);
+    c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+    imgData=c.toDataURL('image/jpeg',.85);$('#thumb').src=imgData;$('#prev').style.display='flex';URL.revokeObjectURL(u);
+  };
+  im.src=u;e.target.value='';
+};
+$('#imgx').onclick=()=>{imgData=null;$('#prev').style.display='none'};
+
+async function listModels(key){
+  if(models)return models;
+  const r=await fetch(API+'/models',{headers:{Authorization:'Bearer '+key}});
+  if(!r.ok)throw new Error(r.status===401?'API key tidak valid':'Gagal ambil daftar model ('+r.status+')');
+  const d=await r.json();
+  models=d.data.filter(m=>m.active!==false&&!/whisper|guard|tts|orpheus|playai|embed|safeguard|compound/i.test(m.id)).map(m=>m.id);
+  return models;
+}
+function rank(list,prefs){const o=[];prefs.forEach(p=>list.forEach(id=>{if(p.test(id)&&!o.includes(id))o.push(id)}));return o}
+function candidates(list,vision){
+  const v=rank(list,[/llama-4-maverick/,/llama-4-scout/,/vision/]);
+  if(vision)return v;
+  return [...new Set([...rank(list,[/llama-3\.3-70b/,/gpt-oss-120b/,/llama-4-maverick/,/llama-4-scout/,/qwen/,/llama/]),...list])];
+}
+const SYS=`You design low-poly 3D characters and objects from primitive shapes. Reply with ONLY a JSON object: {"parts":[{"n":"name","shape":"box|sphere|cyl|cone|torus|plane","pos":[x,y,z],"size":[x,y,z],"rot":[rx,ry,rz],"color":"#rrggbb","mirror":false}]}.
+Rules: Y is up, feet rest on y=0, a character is about 3 units tall, it faces +Z. pos is the part's center. size is full width/height/depth (cyl: x and z are the diameter, y is the height; cone: x and z are the base diameter, y is the height; sphere: diameter). rot is in degrees. mirror:true adds a copy with x negated, so use it for arms, legs, eyes, ears and give those parts x>0. Use 10 to 30 parts with distinct colors: head, body, limbs, face details, accessories. If an image is given, match its shapes and colors.`;
+async function chat(key,model,messages,json){
+  const body={model,messages,temperature:.4,max_tokens:3000};
+  if(json)body.response_format={type:'json_object'};
+  const r=await fetch(API+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(body)});
+  if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}const er=new Error(m||('Error '+r.status));er.status=r.status;throw er}
+  return (await r.json()).choices[0].message.content;
+}
+function build(parts){
+  if($('#rep').checked){select(null);world.children.slice().forEach(o=>{world.remove(o);o.geometry.dispose();o.material.dispose()})}
+  const num=(a,d)=>Array.isArray(a)&&a.length>=3?a.slice(0,3).map(x=>isFinite(+x)?+x:0):d;
+  let n=0;
+  parts.slice(0,60).forEach(p=>{
+    if(!p||!geos[p.shape])return;
+    const pos=num(p.pos,[0,1,0]),sz=num(p.size,[1,1,1]).map(x=>Math.max(.02,Math.abs(x))),rot=num(p.rot,[0,0,0]).map(d=>d*Math.PI/180);
+    const c=/^#[0-9a-f]{6}$/i.test(p.color)?p.color:'#cccccc';
+    const add=mir=>{
+      const m=mk(p.shape,c);m.scale.set(...sz);
+      m.position.set(mir?-pos[0]:pos[0],pos[1],pos[2]);
+      m.rotation.set(rot[0],mir?-rot[1]:rot[1],mir?-rot[2]:rot[2]);
+      world.add(m);n++;
+    };
+    add(false);if(p.mirror&&Math.abs(pos[0])>.01)add(true);
+  });
+  select(null);count();
+  orbit.target.set(0,1.4,0);cam.position.set(4,3,6.5);
+  return n;
+}
+$('#gen').onclick=async()=>{
+  const key=$('#key').value.trim(),txt=$('#pr').value.trim(),btn=$('#gen');
+  if(!key)return st('Isi API key Groq dulu',1);
+  if(!txt&&!imgData)return st('Tulis deskripsi atau tambah gambar',1);
+  btn.disabled=true;
+  try{
+    store.set(KEY,key);st('Mencari model...');
+    const cands=candidates(await listModels(key),!!imgData).slice(0,3);
+    if(!cands.length)throw new Error(imgData?'Akun ini tidak punya model yang bisa baca gambar':'Tidak ada model chat tersedia');
+    const content=imgData?[{type:'text',text:txt||'Buat model 3D dari gambar ini.'},{type:'image_url',image_url:{url:imgData}}]:txt;
+    const msgs=[{role:'system',content:SYS},{role:'user',content}];
+    let out=null,used,last;
+    for(const m of cands){
+      st('Membuat dengan '+m+'...');
+      try{
+        try{out=await chat(key,m,msgs,true)}catch(e){if(e.status===400)out=await chat(key,m,msgs,false);else throw e}
+        used=m;break;
+      }catch(e){last=e;if(e.status===401||e.status===429)break}
+    }
+    if(!out)throw last;
+    const mt=out.match(/\{[\s\S]*\}/);if(!mt)throw new Error('Jawaban model bukan JSON, coba lagi');
+    const n=build(JSON.parse(mt[0]).parts||[]);
+    if(!n)throw new Error('Model tidak menghasilkan bagian apa pun, coba lagi');
+    st('Selesai: '+n+' bagian ('+used+')');
+  }catch(e){
+    st(e.status===401?'API key tidak valid':e.status===429?'Limit Groq tercapai, coba lagi sebentar':(e.message||'Gagal'),1);
+  }
+  btn.disabled=false;
+};
+
+addMesh('box','#4fd1a5');
+addMesh('sphere','#e8a14f').position.set(2,.6,0);
+select(null);refresh();
+
+renderer.setAnimationLoop(()=>{orbit.update();renderer.render(scene,cam)});
+</script>
+</body>
+</html>
